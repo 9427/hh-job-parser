@@ -325,7 +325,7 @@ def draw_salary_pie_chart(job_df_full):
 
 def draw_salary_histogram(job_df_full):
     job_df_class = job_df_full[job_df_full['salary']>0].groupby('job_type').sum()
-    job_df_class['salary'] /= salary_df.groupby('job_type').size()
+    job_df_class['salary'] /= job_df_full[job_df_full['salary']>0].groupby('job_type').size()
     job_df_class.plot(kind='barh', y='salary', figsize=(6, 6), label="")
     plt.title("Средняя заработная плата")
     plt.show()
