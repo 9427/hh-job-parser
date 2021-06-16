@@ -7,6 +7,7 @@ import json
 import string
 import time
 import random
+from forex_python.converter import CurrencyRates
 from sklearn.feature_extraction.text import CountVectorizer
 from sklearn.feature_extraction.text import TfidfVectorizer
 
@@ -48,7 +49,7 @@ def get(query, timeout=5, max_retries=5, backoff_factor=0.3):
     return response
 
 def get_id_page_counts(job_name, area):
-    print(job_name)
+    print('Загрузка вакансий по запросу "', job_name, '"...', sep='')
     query_data = {
         "job_name": job_name,
         "area": area
@@ -126,12 +127,11 @@ def get_job_data(job_name, count=None, area=113):
     return ids_to_data(id_list, area)
 
 def normalize_currency(job_entry):
+    c = CurrencyRates()
     if job_entry.currency == 'USD':
-        job_entry.currency = 'RUR'
-        job_entry.salary *= 75 
+        job_entry.salary *= round(float(c.get_rate('USD', 'RUB'))) 
     if job_entry.currency == 'EUR':
-        job_entry.currency = 'RUR'
-        job_entry.salary *= 90
+        job_entry.salary *= round(float(c.get_rate('EUR', 'RUB')))
     return job_entry
 
 def normalize_salary(job_df):
@@ -210,6 +210,19 @@ def translate_experience(label):
         return 'Более 6 лет'
     return label
 
+def input_data():
+    job_list = []
+    query = ''
+    query_number = 0
+    area = input('Введите регион поиска вакансий:')
+    max_samples = int(input('Введите макс. кол-во вакансий по каждому запросу:'))
+    while (query != '' or query_number == 0):
+        query_number += 1
+        query = input('Введите название вакансии ' + str(query_number) + ':')
+        if query:
+            job_list.append(query)
+    return job_list, area, max_samples
+            
 def download_data(job_list, area, max_samples):
     
     if area:
@@ -246,13 +259,22 @@ def download_data(job_list, area, max_samples):
         'наличие',
         'медицинский',
         'соблюдение',
-        'обязанность'
+        'обязанность',
+        'высокий',
+        'средний',
+        'заработный',
+        'плата',
+        'тыс',
+        'руб',
     ]
     stop_words += extra_words
     
+    morph = pymorphy2.MorphAnalyzer()
     for job in job_list:
         for word in job.split():
-            stop_words.append(word)
+            stop_words.append(morph.parse(word)[0].normal_form)
+    #for word in area.split():
+    #    stop_words.append(morph.parse(word)[0].normal_form)
             
     desc_dict = job_df_full.groupby('job_type')['description'].apply(','.join).to_dict()
     job_df_full = job_df_full.drop(columns=['description'])
@@ -285,6 +307,20 @@ def draw_experience_pie_chart(job_df_full):
     plt.title("Требуемый опыт работы")
     plt.show()
 
+def draw_employment_histogram(job_df_full):
+    x_var = 'job_type'
+    groupby_var = 'employment'
+    job_df_agg = job_df_full.loc[:, [x_var, groupby_var]].groupby(groupby_var)
+    vals = [job_df_full[x_var].astype('category').cat.codes.values.tolist() for i, job_df_full in job_df_agg]
+    plt.figure(figsize=(10,5))
+    colors = [plt.cm.Spectral(i/float(len(vals)-1)) for i in range(len(vals))]
+    n, bins, patches = plt.hist(vals, job_df_full[x_var].unique().__len__(), color=colors[:len(vals)], rwidth=0.5, stacked=True, density=False)
+    plt.legend({group:col for group, col in zip(np.unique(job_df_full[groupby_var]).tolist(), colors[:len(vals)])})
+    plt.xticks(bins[:-1], np.unique(job_df_full[x_var]).tolist(), rotation=20, horizontalalignment='left')
+    plt.title("Тип занятости")
+    plt.ylabel('Количество вакансий')
+    plt.show()
+    
 def draw_schedule_histogram(job_df_full):
     x_var = 'job_type'
     groupby_var = 'schedule'
@@ -296,6 +332,7 @@ def draw_schedule_histogram(job_df_full):
     plt.legend({group:col for group, col in zip(np.unique(job_df_full[groupby_var]).tolist(), colors[:len(vals)])})
     plt.xticks(bins[:-1], np.unique(job_df_full[x_var]).tolist(), rotation=20, horizontalalignment='left')
     plt.title("График работы")
+    plt.ylabel('Количество вакансий')
     plt.show()
 
 def draw_experience_histogram(job_df_full):
@@ -309,29 +346,60 @@ def draw_experience_histogram(job_df_full):
     plt.legend({group:col for group, col in zip(np.unique(job_df_full[groupby_var]).tolist(), colors[:len(vals)])})
     plt.xticks(bins[:-1], np.unique(job_df_full[x_var]).tolist(), rotation=20, horizontalalignment='left')
     plt.title("Требуемый опыт работы")
+    plt.ylabel('Количество вакансий')
     plt.show()
 
 def draw_salary_ratio(job_df_full):
     job_df_class = job_df_full.groupby(job_df_full['salary']>0).size()
     job_df_class.plot(kind='bar',figsize=(6, 5))
+    plt.legend(['Количество вакансий'])
+    plt.xticks(ticks = [0,1], labels = ['Зарплата не указана', 'Зарплата указана'], rotation = 0)
     plt.title("Соотношение вакансий с указанной заработной платой и без")
-    plt.show()
-
-def draw_salary_pie_chart(job_df_full):
-    job_df_class = job_df_full[job_df_full['salary']>0].groupby('job_type').size()
-    job_df_class.plot(kind='pie', figsize=(6, 6), label="", autopct='%1.0f%%')
-    plt.title("Вакансии, у которых указана заработная плата")
+    plt.xlabel(' ')
     plt.show()
 
 def draw_salary_histogram(job_df_full):
+    x_var = 'job_type'
+    job_df_full['has_salary'] = job_df_full['salary'] > 0
+    groupby_var = 'has_salary'
+    job_df_agg = job_df_full.loc[:, [x_var, groupby_var]].groupby(groupby_var)
+    vals = [job_df_full[x_var].astype('category').cat.codes.values.tolist() for i, job_df_full in job_df_agg]
+    plt.figure(figsize=(10,5))
+    colors = [plt.cm.Spectral(i/float(len(vals)-1)) for i in range(len(vals))]
+    n, bins, patches = plt.hist(vals, job_df_full[x_var].unique().__len__(), color=colors[:len(vals)], rwidth=0.5, stacked=True, density=False)
+    plt.legend(['Зарплата не указана', 'Зарплата указана'])
+    plt.xticks(bins[:-1], np.unique(job_df_full[x_var]).tolist(), rotation=20, horizontalalignment='left')
+    plt.title("Вакансии, у которых указана заработная плата")
+    plt.ylabel('Количество вакансий')
+    plt.show()
+    
+
+def draw_avg_salary_histogram(job_df_full):
     job_df_class = job_df_full[job_df_full['salary']>0].groupby('job_type').sum()
     job_df_class['salary'] /= job_df_full[job_df_full['salary']>0].groupby('job_type').size()
     job_df_class.plot(kind='barh', y='salary', figsize=(6, 6), label="")
+    plt.ylabel(' ')
+    plt.legend(['Руб. в месяц'])
     plt.title("Средняя заработная плата")
     plt.show()
 
 def draw_tfidf_histogram(tfidf_dict, job_list):
+    remove_repeated_ngrams(tfidf_dict, job_list)
     for job in job_list:
         tfidf_dict[job].head(20).sort_values(by='TF-IDF', ascending=True).plot(kind='barh')
         plt.title(job)
         plt.show()
+
+def remove_repeated_ngrams(tfidf_data, job_list):
+    for job in job_list:
+        edits_made = True
+        shift = 0
+        while edits_made:
+            edits_made = False
+            for ngram in tfidf_data[job][0+shift:22].index:
+                if len(ngram.split()) > 1:
+                    for word in ngram.split():
+                        tfidf_data[job].drop(tfidf_data[job][tfidf_data[job].index == word].index, inplace=True)
+                        shift -= 1
+                        edits_made = True
+            shift += 20
